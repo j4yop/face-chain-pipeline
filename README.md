@@ -16,45 +16,49 @@ public Ethereum Sepolia testnet.
 
 | Field | Value |
 |---|---|
-| Demo subject | Public Wikipedia photo of Cristiano Ronaldo (CC-licensed) |
+| Demo subject | Public Wikipedia photo of Cristiano Ronaldo (2010 Real Madrid unveiling, CC BY-SA) |
 | Reverse-image provider | SerpAPI Google Lens (free tier, 250/mo) |
-| Selected social-media match | [`https://www.instagram.com/p/DZtLoP-CFLR/`](https://www.instagram.com/p/DZtLoP-CFLR/) (real Instagram post) |
-| On-chain transaction | [`0xdae079a311874e01046e0b2f9c324bf2bba269b53b70dc797ad9feb357bdbfeb`](https://sepolia.etherscan.io/tx/0xdae079a311874e01046e0b2f9c324bf2bba269b53b70dc797ad9feb357bdbfeb) |
-| Block | `11628765` |
+| Selected social-media match | [`https://de.pinterest.com/pin/65091157084368709/`](https://de.pinterest.com/pin/65091157084368709/) (real Pinterest post, German locale routing) |
+| On-chain transaction | [`0x5adffcb0fb27a8a786c8bbd380d1d866811b809a2e26f5c37e7637c20e2e69e7`](https://sepolia.etherscan.io/tx/0x5adffcb0fb27a8a786c8bbd380d1d866811b809a2e26f5c37e7637c20e2e69e7) |
+| Block | `11629004` |
 | Sender wallet | `0x6061873f74E29E686755f9110DB08A8c678f6D52` |
 | Input calldata | 884 bytes of UTF-8 JSON (SHA-256 of the input image, the face embedding, the matched URL, etc.) |
-| **Screen recording** | **[Google Drive — face-chain-pipeline-e2e.mov](https://drive.google.com/file/d/1xKNrsQEYvfexK2LQQ5oGYyGeTcTODDch/view?usp=sharing)** |
+| **Screen recording** | **[Google Drive — face-chain-pipeline-e2e-v3.mov](https://drive.google.com/file/d/1oNw3HLlM0pRpO0w3AxyolWbyo4utHtPQ/view?usp=sharing)** |
 
 ### On-chain payload (decoded from calldata)
 
 ```json
 {
   "schema": "face-chain-pipeline/v1",
-  "run_id": "6ad55a1a-ae0d-4265-becc-67f3db937909",
-  "ts_utc": "2026-09-03T20:05:21.503791+00:00",
-  "input_image_sha256": "4eba5453a351cb269bf6b4d50835b85bfdb673df78543c4852708f9c91845656",
-  "face_embedding_sha256": "14b448b08c4e3940ee267907e231c59a02197bef861cabfbf2a1cc0a17d39f37",
+  "run_id": "60848b26-392b-4758-97a2-1d2bad14ba43",
+  "ts_utc": "2026-09-03T20:54:59.457017+00:00",
+  "input_image_sha256": "844c44b607e8279b37bc9d92a93fa48a3c83401f3658e37f03483fabcca43f60",
+  "face_embedding_sha256": "912b480ebf5c481b71332e593846f0c38d74634d2a01ce3f57e5dee7a74139ce",
   "face_embedding_dim": 512,
   "face_meta": {
-    "det_score": 0.8658279180526733,
-    "age": 49,
+    "det_score": 0.8332050442695618,
+    "age": 32,
     "gender": 1,
-    "bbox": [117.82, 63.76, 323.08, 335.58]
+    "bbox": [196.16, 127.94, 367.74, 352.55]
   },
   "match": {
-    "url": "https://www.instagram.com/p/DZtLoP-CFLR/",
+    "url": "https://de.pinterest.com/pin/65091157084368709/",
     "bucket": "pages_with_matching_images",
-    "matched_image_sha256": "279711b7e33701bc8a50cd2175a2374a075a8ec203cbb127979faf45ad16c329"
+    "matched_image_sha256": "29c59191ebd97003b74e1d6a0d5a2bd26f1058b8671ccc15fa45bf0203178e71"
   },
   "vision_response_summary": {
     "provider": "SerpAPI (Google Lens)",
-    "n_pages_with_matching_images": 459,
-    "n_full_matching_images": 459,
-    "n_visually_similar_images": 459
+    "n_pages_with_matching_images": 186,
+    "n_full_matching_images": 186,
+    "n_visually_similar_images": 186
   },
   "reverse_image_provider": "SerpAPI (Google Lens)"
 }
 ```
+
+The `input_image_sha256` (`844c44b6...`) was independently verified to
+match the SHA-256 of the 2010 Real Madrid photo downloaded from
+Wikimedia, confirming the on-chain record self-documents the real input.
 
 Re-verify with `web3.py`:
 
@@ -62,11 +66,13 @@ Re-verify with `web3.py`:
 from web3 import Web3
 import json
 w3 = Web3(Web3.HTTPProvider("https://ethereum-sepolia-rpc.publicnode.com"))
-tx = w3.eth.get_transaction("0xdae079a311874e01046e0b2f9c324bf2bba269b53b70dc797ad9feb357bdbfeb")
+tx = w3.eth.get_transaction("0x5adffcb0fb27a8a786c8bbd380d1d866811b809a2e26f5c37e7637c20e2e69e7")
 print(json.loads(bytes.fromhex(tx.input.hex().removeprefix("0x")).decode("utf-8")))
 ```
 
-Or open the Etherscan link in a browser → scroll to **Input Data** → **Click to see More**.
+Or open the Etherscan link in a browser → scroll to **Input Data** →
+**Click to see More** → choose **UTF-8** from the dropdown to view the
+decoded JSON.
 
 ---
 
