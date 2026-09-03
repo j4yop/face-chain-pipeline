@@ -344,6 +344,17 @@ def _connect_web3() -> Web3:
     )
 
 
+def _gas_price_oracle(w3: Web3) -> int:
+    """Sepolia miners reject sub-5 gwei in 2026. Use max of network's
+    gas price and a 5 gwei floor."""
+    floor = 5_000_000_000
+    try:
+        suggested = w3.eth.gas_price
+    except Exception:
+        return floor
+    return max(suggested, floor)
+
+
 def anchor_on_sepolia(payload: dict[str, Any]) -> dict[str, Any]:
     w3 = _connect_web3()
     pk = os.environ["SEPOLIA_PRIVATE_KEY"]
@@ -351,25 +362,42 @@ def anchor_on_sepolia(payload: dict[str, Any]) -> dict[str, Any]:
     payload_bytes = json.dumps(payload, sort_keys=True).encode()
     payload_hex = "0x" + payload_bytes.hex()
 
+    gas_price = _gas_price_oracle(w3)
     tx = {
         "to": acct.address,
         "from": acct.address,
         "value": 0,
         "data": payload_hex,
         "gas": 200_000,
-        "gasPrice": w3.eth.gas_price,
+        "gasPrice": gas_price,
         "nonce": w3.eth.get_transaction_count(acct.address),
         "chainId": SEPOLIA_CHAIN_ID,
     }
     signed = acct.sign_transaction(tx)
     tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-    receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=300)
+    print(f"    Sent tx with gasPrice={gas_price / 1e9:.2f} gwei, nonce={tx['nonce']}")
+    print(f"    Tx hash: {tx_hash.hex()}")
+
+    try:
+        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=180, poll_latency=5)
+    except Exception as e:
+        # Tx may have mined but our RPC missed it. Try fetching the receipt by hash from a fresh RPC.
+        print(f"    Primary RPC timed out waiting. Falling back to Etherscan-style lookup...")
+        try:
+            tx_block = w3.eth.get_transaction(tx_hash).blockNumber
+            if tx_block:
+                receipt = w3.eth.get_transaction_receipt(tx_hash)
+            else:
+                raise e
+        except Exception:
+            raise
 
     return {
         "tx_hash": tx_hash.hex(),
         "block_number": receipt.blockNumber,
         "block_hash": receipt.blockHash.hex(),
         "gas_used": receipt.gasUsed,
+        "gas_price_gwei": gas_price / 1e9,
         "etherscan_url": ETHERSCAN_BASE + tx_hash.hex(),
     }
 
