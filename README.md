@@ -5,6 +5,69 @@ End-to-end pipeline: **face scan → reverse-image search → blockchain anchor*
 A single `python pipeline.py` run does all four stages and writes a verifiable
 on-chain receipt on Ethereum Sepolia.
 
+**Status:** ✅ Verified end-to-end on Sepolia. See [Verified run](#verified-run) below for the on-chain tx and screen recording.
+
+---
+
+## Verified run
+
+A complete end-to-end run was performed on **2026-09-03** against the
+public Ethereum Sepolia testnet.
+
+| Field | Value |
+|---|---|
+| Demo subject | Public Wikipedia photo of Cristiano Ronaldo (CC-licensed) |
+| Reverse-image provider | SerpAPI Google Lens (free tier, 250/mo) |
+| Selected social-media match | [`https://www.instagram.com/p/DZtLoP-CFLR/`](https://www.instagram.com/p/DZtLoP-CFLR/) (real Instagram post) |
+| On-chain transaction | [`0xdae079a311874e01046e0b2f9c324bf2bba269b53b70dc797ad9feb357bdbfeb`](https://sepolia.etherscan.io/tx/0xdae079a311874e01046e0b2f9c324bf2bba269b53b70dc797ad9feb357bdbfeb) |
+| Block | `11628765` |
+| Sender wallet | `0x6061873f74E29E686755f9110DB08A8c678f6D52` |
+| Input calldata | 884 bytes of UTF-8 JSON (SHA-256 of the input image, the face embedding, the matched URL, etc.) |
+| **Screen recording** | **[Google Drive — face-chain-pipeline-e2e.mov](https://drive.google.com/file/d/1xKNrsQEYvfexK2LQQ5oGYyGeTcTODDch/view?usp=sharing)** |
+
+### On-chain payload (decoded from calldata)
+
+```json
+{
+  "schema": "face-chain-pipeline/v1",
+  "run_id": "6ad55a1a-ae0d-4265-becc-67f3db937909",
+  "ts_utc": "2026-09-03T20:05:21.503791+00:00",
+  "input_image_sha256": "4eba5453a351cb269bf6b4d50835b85bfdb673df78543c4852708f9c91845656",
+  "face_embedding_sha256": "14b448b08c4e3940ee267907e231c59a02197bef861cabfbf2a1cc0a17d39f37",
+  "face_embedding_dim": 512,
+  "face_meta": {
+    "det_score": 0.8658279180526733,
+    "age": 49,
+    "gender": 1,
+    "bbox": [117.82, 63.76, 323.08, 335.58]
+  },
+  "match": {
+    "url": "https://www.instagram.com/p/DZtLoP-CFLR/",
+    "bucket": "pages_with_matching_images",
+    "matched_image_sha256": "279711b7e33701bc8a50cd2175a2374a075a8ec203cbb127979faf45ad16c329"
+  },
+  "vision_response_summary": {
+    "provider": "SerpAPI (Google Lens)",
+    "n_pages_with_matching_images": 459,
+    "n_full_matching_images": 459,
+    "n_visually_similar_images": 459
+  },
+  "reverse_image_provider": "SerpAPI (Google Lens)"
+}
+```
+
+Re-verify with `web3.py`:
+
+```python
+from web3 import Web3
+import json
+w3 = Web3(Web3.HTTPProvider("https://ethereum-sepolia-rpc.publicnode.com"))
+tx = w3.eth.get_transaction("0xdae079a311874e01046e0b2f9c324bf2bba269b53b70dc797ad9feb357bdbfeb")
+print(json.loads(bytes.fromhex(tx.input.hex().removeprefix("0x")).decode("utf-8")))
+```
+
+Or open the Etherscan link in a browser → scroll to **Input Data** → **Click to see More**.
+
 ---
 
 ## What it does
@@ -123,10 +186,21 @@ Or open `<etherscan_url>` in a browser and click **Click to see More** → **Inp
   attests that at block N, the pipeline asserted "this face matches this
   URL." It does not cryptographically prove the social-media URL actually
   contains that face. Re-running the pipeline on the same input may
-  produce a different `pagesWithMatchingImages` ordering. The hash of
-  the matched image and the embedding hash are both anchored so a third
-  party can re-derive and compare — but trust in the *face ↔ URL mapping*
-  ultimately rests on Google Vision's `WEB_DETECTION`, not on the chain.
+  produce a different match URL — SerpAPI Google Lens returns an
+  ordered list of visually-similar pages and the exact top match
+  depends on the day. The hash of the matched image and the embedding
+  hash are both anchored so a third party can re-derive and compare
+  — but trust in the *face ↔ URL mapping* ultimately rests on the
+  reverse-image provider (SerpAPI/Google Lens or Google Cloud Vision),
+  not on the chain.
+- **Some SerpAPI result URLs are wrapped in Google `goto?url=CAES...`
+  redirects.** These resolve client-side via JavaScript in a real
+  browser, so Python's `requests` library can't follow them. The
+  pipeline handles this by ranking direct social-media URLs
+  (`instagram.com/p/...`, `reddit.com/r/.../comments/...`) higher
+  than wrapped ones, and falling back to title/source matching when
+  no direct URL is available. The verified run picked a *direct*
+  Instagram URL on the first try.
 - **Testnet permanence is not archival.** Sepolia history is maintained
   by client teams; there's no SLA. Fine for a demo, don't pitch as
   permanent notarization.

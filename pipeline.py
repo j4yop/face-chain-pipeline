@@ -491,12 +491,14 @@ def run(image_arg: str | None) -> dict[str, Any]:
             "matched_image_sha256": matched_image_hash,
         },
         "vision_response_summary": {
+            "provider": "SerpAPI (Google Lens)" if os.environ.get("SERPAPI_KEY") else "Google Cloud Vision",
             "best_guess_labels": web["best_guess_labels"][:5],
             "n_pages_with_matching_images": len(web["pages_with_matching_images"]),
             "n_full_matching_images": len(web["full_matching_images"]),
             "n_partial_matching_images": len(web["partial_matching_images"]),
             "n_visually_similar_images": len(web["visually_similar_images"]),
         },
+        "reverse_image_provider": "SerpAPI (Google Lens)" if os.environ.get("SERPAPI_KEY") else "Google Cloud Vision",
     }
 
     print("\n[4/4] Anchoring payload to Ethereum Sepolia...")
@@ -524,7 +526,7 @@ def run(image_arg: str | None) -> dict[str, Any]:
         f"  Detector confidence:    {face_meta['det_score']:.4f}",
         f"  Bounding box:           {face_meta['bbox']}",
         "",
-        "REVERSE-IMAGE SEARCH (Google Cloud Vision)",
+        f"REVERSE-IMAGE SEARCH ({'SerpAPI Google Lens' if os.environ.get('SERPAPI_KEY') else 'Google Cloud Vision WEB_DETECTION'})",
         f"  Best guess labels:      {payload['vision_response_summary']['best_guess_labels']}",
         f"  Pages with match:       {payload['vision_response_summary']['n_pages_with_matching_images']}",
         f"  Full matches:           {payload['vision_response_summary']['n_full_matching_images']}",
