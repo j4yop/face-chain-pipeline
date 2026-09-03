@@ -14,9 +14,13 @@ on-chain receipt on Ethereum Sepolia.
    pack → 512-d ArcFace embedding, L2-normalized). No external API key
    for this stage; runs entirely on your machine.
 2. **Reverse-image search** using
-   [Google Cloud Vision `WEB_DETECTION`](https://cloud.google.com/vision/docs/detecting-web).
-   Returns real public URLs where the image (or visually-similar images)
-   appear on the open web, including social-media hosts.
+   [SerpAPI Google Lens](https://serpapi.com/google-lens-api) by default
+   (no card required, 250 searches/month free — sign up at
+   https://serpapi.com/users/sign_up with GitHub or Google). Alternate:
+   [Google Cloud Vision `WEB_DETECTION`](https://cloud.google.com/vision/docs/detecting-web)
+   if you have a GCP project with billing enabled.
+   Both return real public URLs where the image (or visually-similar
+   images) appear on the open web, including social-media hosts.
 3. **Pick the best matching social-media URL** from the response
    (priority: `pagesWithMatchingImages` → `fullMatchingImages` →
    `partialMatchingImages` → `visuallySimilarImages`, filtered to
@@ -37,7 +41,7 @@ Outputs `receipt.json` (full) and `receipt.txt` (human-readable) in
 | Decision | Choice | Why |
 |---|---|---|
 | Face lib | InsightFace `buffalo_l` | 512-d ArcFace, real biometric, no dlib-from-source pain, MIT code, Apple Silicon wheels. |
-| Reverse-image | Google Cloud Vision `WEB_DETECTION` | Returns real public URLs across social hosts, 1k units/month free, stable Python client, no scraping. |
+| Reverse-image | SerpAPI Google Lens (no card, 250/mo free) — alternate: Google Cloud Vision `WEB_DETECTION` | Returns real public URLs across social hosts; SerpAPI needs zero GCP setup, just a GitHub/Google signup. |
 | Blockchain | Ethereum Sepolia self-send | Public, re-verifiable by anyone via Etherscan, no node install, faucet available. |
 | On-chain format | Raw JSON in `tx.data` | No contract to deploy, re-read via `w3.eth.get_transaction(tx_hash)`, visible on Etherscan. |
 | Demo subject | Cristiano Ronaldo (Wikimedia Commons, CC-licensed) | Public figure guaranteed to surface in `WEB_DETECTION` results. The pipeline is face-agnostic — see "Limitations" below. |
@@ -58,22 +62,26 @@ pip install -r requirements.txt
 
 ### One-time secrets
 
-1. **Google Cloud Vision**
+1. **Reverse-image search (SerpAPI — recommended, no card, no GCP)**
+   - Sign up at https://serpapi.com/users/sign_up with GitHub or Google
+   - No payment method required; free tier is 250 searches/month and never auto-converts
+   - Dashboard at https://serpapi.com/manage-api-key shows your key
+2. **(Alternate) Google Cloud Vision**
    - Create a GCP project: https://console.cloud.google.com
    - Enable the **Cloud Vision API**
-   - Create a service account, download its JSON key
-   - **Card on file is required** but you stay inside the 1,000-units/month
-     free tier and the $300 GCP trial credit, so nothing is charged
-   - Set a budget alert for $1 in Billing to be safe
-2. **Sepolia RPC + wallet**
+   - Create an API key under **APIs & Services → Credentials**
+   - **A credit card is required** and a minimum prepayment is enforced
+     in some regions. Set a budget alert for $1 to be safe
+3. **Sepolia RPC + wallet**
    - Free Alchemy key: https://alchemy.com → create app → Sepolia
    - Create a throwaway wallet, export its private key
-   - Fund it: https://faucet.quicknode.com/ethereum/sepolia (≈0.1 ETH free)
+   - Fund it: https://cloud.google.com/application/web3/faucet/ethereum/sepolia
+     (Google faucet — no mainnet ETH required, no card)
 
 Then:
 ```bash
 cp .env.example .env
-# edit .env: fill in GOOGLE_APPLICATION_CREDENTIALS, SEPOLIA_RPC_URL, SEPOLIA_PRIVATE_KEY
+# edit .env: fill in SERPAPI_KEY (or GOOGLE_VISION_API_KEY), SEPOLIA_RPC_URL, SEPOLIA_PRIVATE_KEY
 ```
 
 ---
@@ -131,7 +139,9 @@ Or open `<etherscan_url>` in a browser and click **Click to see More** → **Inp
   Swap to `buffalo_s` (or a fully permissive model) for commercial use.
 - **GCP requires a card on file** even for the free tier. Set a budget
   alert. Each `WEB_DETECTION` call is ~10 units; you can run ~100 demos
-  per month free.
+  per month free. **If you don't want to deal with GCP at all, the
+  default reverse-image provider is SerpAPI Google Lens (no card,
+  250/month free)** — just sign up with GitHub or Google.
 - **InsightFace `buffalo_l` is 326 MB.** First-run download is slow.
 - **Demo subject = Cristiano Ronaldo** because a public figure is the
   only way to *guarantee* a real social-media match in a screen

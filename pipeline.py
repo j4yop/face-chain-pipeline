@@ -111,7 +111,29 @@ def encode_face(img_path: Path) -> tuple[np.ndarray, dict[str, Any]]:
 # ---------- Stage 2: reverse-image search ----------------------------------
 
 def vision_web_detection(img_path: Path) -> dict[str, Any]:
-    client = vision.ImageAnnotatorClient()
+    """Reverse-image search.
+
+    Provider order (controlled by .env):
+      1. SERPAPI_KEY  -> Google Lens via SerpAPI (no card, 250/mo free)
+      2. GOOGLE_VISION_API_KEY  -> Google Cloud Vision WEB_DETECTION
+      3. GOOGLE_APPLICATION_CREDENTIALS  -> Vision via service account
+
+    Both providers are normalized into a single shape with four buckets:
+        pages_with_matching_images, full_matching_images,
+        partial_matching_images, visually_similar_images
+    plus best_guess_labels, so the picker logic is identical.
+    """
+    if os.environ.get("SERPAPI_KEY"):
+        return _serpapi_lens(img_path)
+    return _google_vision(img_path)
+
+
+def _google_vision(img_path: Path) -> dict[str, Any]:
+    api_key = os.environ.get("GOOGLE_VISION_API_KEY")
+    if api_key:
+        client = vision.ImageAnnotatorClient(client_options={"api_key": api_key})
+    else:
+        client = vision.ImageAnnotatorClient()
     with open(img_path, "rb") as f:
         content = f.read()
     image = vision.Image(content=content)
@@ -135,11 +157,127 @@ def vision_web_detection(img_path: Path) -> dict[str, Any]:
     }
 
 
-def pick_best_social_match(web: dict[str, Any]) -> dict[str, Any] | None:
-    """Walk pages -> full -> partial -> similar, return first social-host URL."""
-    def is_social(url: str) -> bool:
-        return any(h in url.lower() for h in SOCIAL_HOSTS)
+def _serpapi_lens(img_path: Path) -> dict[str, Any]:
+    """Reverse-image via SerpAPI Google Lens. Free tier: 250 searches/month, no card."""
+    api_key = os.environ["SERPAPI_KEY"]
+    # 1) Upload the image (valid 10 min).
+    with open(img_path, "rb") as f:
+        up = requests.post(
+            "https://serpapi.com/image",
+            files={"image": (img_path.name, f, "image/jpeg")},
+            data={"api_key": api_key},
+            timeout=30,
+        )
+    up.raise_for_status()
+    up_data = up.json()
+    if "image_id" not in up_data:
+        raise RuntimeError(f"SerpAPI upload failed: {up_data}")
+    image_id = up_data["image_id"]
 
+    # 2) Query Google Lens across multiple result buckets. SerpAPI's
+    #    `exact_matches` often wraps every result in opaque Google goto
+    #    redirects; `visual_matches` and `organic_results` frequently
+    #    return direct social-media URLs. We merge from all three and
+    #    de-duplicate, preferring direct (non-google.com) URLs.
+    seen: set[str] = set()
+    candidates: list[dict[str, Any]] = []
+    for type_ in ("exact_matches", "visual_matches", "organic_results"):
+        params = {
+            "engine": "google_lens",
+            "image_id": image_id,
+            "type": type_,
+            "api_key": api_key,
+        }
+        try:
+            res = requests.get("https://serpapi.com/search.json", params=params, timeout=30)
+            res.raise_for_status()
+            data = res.json()
+        except Exception:
+            continue
+        if "error" in data:
+            continue
+        bucket = data.get(type_) or []
+        for m in bucket:
+            url = m.get("link") or m.get("redirect_link") or ""
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            candidates.append({
+                "url": url,
+                "type": type_,
+                "title": m.get("title", ""),
+                "source": m.get("source", "") or m.get("source_domain", ""),
+            })
+
+    # Normalize: all candidates go into all four buckets so the picker can
+    # find them. The picker itself does the unwrap-redirect work.
+    return {
+        "pages_with_matching_images": [{"url": c["url"], "score": 1.0, "title": c["title"], "source": c["source"]} for c in candidates],
+        "full_matching_images":       [{"url": c["url"], "score": 1.0, "title": c["title"], "source": c["source"]} for c in candidates],
+        "partial_matching_images":    [{"url": c["url"], "score": 0.5, "title": c["title"], "source": c["source"]} for c in candidates],
+        "visually_similar_images":    [{"url": c["url"], "title": c["title"], "source": c["source"]}             for c in candidates],
+        "best_guess_labels":          [],
+    }
+
+
+def follow_redirects(url: str, timeout: int = 10) -> tuple[str, list[str]]:
+    """Follow HTTP redirects (with browser-like headers) and return
+    (final_url, redirect_chain). Returns (url, []) if no redirect or any
+    non-fatal error. Used to unwrap Google 'goto' and 'url' links."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    try:
+        r = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True, stream=True)
+        chain = [resp.url for resp in r.history] + [r.url]
+        r.close()
+        return r.url, chain
+    except Exception:
+        return url, []
+
+
+def unwrap_redirect(url: str, follow: bool = True) -> str:
+    """Google wraps real URLs in https://www.google.com/url?... or
+    https://www.google.com/goto?url=CAES... — try to extract the real one.
+
+    The 'url' query value may itself be a base64-encoded Google internal
+    payload, in which case we follow the HTTP redirect to get the real URL.
+    """
+    if "google.com/url?" in url or "google.com/goto?" in url or "google.com/search?" in url:
+        from urllib.parse import urlparse, parse_qs
+        try:
+            q = parse_qs(urlparse(url).query)
+            for key in ("url", "q", "imgurl"):
+                if key in q and q[key]:
+                    inner = q[key][0]
+                    if follow and inner.startswith(("CAES", "CAUY", "http")):
+                        final, _ = follow_redirects(inner)
+                        if "google.com" not in final:
+                            return final
+                        return inner
+                    return inner
+        except Exception:
+            pass
+    return url
+
+
+def is_social_text(s: str) -> bool:
+    """Check if a URL or human-readable title contains a social-host hint."""
+    s_low = s.lower()
+    return any(h in s_low for h in SOCIAL_HOSTS) or any(
+        kw in s_low for kw in ("facebook", "twitter", "reddit", "instagram", "tiktok", "youtube", "linkedin", "pinterest", "tumblr")
+    )
+
+
+def pick_best_social_match(web: dict[str, Any]) -> dict[str, Any] | None:
+    """Walk pages -> full -> partial -> similar, return first social-host URL.
+    Unwrap Google redirectors (and follow them when possible). Strongly
+    prefer direct social URLs over indirect ones (Google goto wrappers
+    whose destination is unreachable from Python)."""
+    collected: list[dict[str, Any]] = []
     for bucket, key in [
         ("pages_with_matching_images", "url"),
         ("full_matching_images", "url"),
@@ -147,10 +285,32 @@ def pick_best_social_match(web: dict[str, Any]) -> dict[str, Any] | None:
         ("visually_similar_images", "url"),
     ]:
         for entry in web.get(bucket, []):
-            url = entry.get(key, "")
-            if url and is_social(url):
-                return {"url": url, "bucket": bucket, "entry": entry}
-    return None
+            raw = entry.get(key, "")
+            title = entry.get("title", "")
+            source = entry.get("source", "")
+            url = unwrap_redirect(raw) if raw else ""
+            collected.append({
+                "url": url or raw, "raw_url": raw, "title": title, "source": source, "bucket": bucket,
+            })
+
+    # Rank: direct social URL > direct non-social URL > Google-wrapper with social title/source > anything.
+    def rank(c: dict[str, Any]) -> tuple[int, int]:
+        u = c["url"] or ""
+        is_direct_social = is_social_text(u) and "google.com" not in u
+        title_or_source_social = (not is_direct_social) and is_social_text(f"{c['title']} {c['source']}")
+        return (
+            0 if is_direct_social else (1 if title_or_source_social else 2),
+            0 if is_direct_social else 1,
+        )
+
+    social = [c for c in collected if is_social_text(c["url"]) or is_social_text(f"{c['title']} {c['source']}")]
+    if not social:
+        return None
+    social.sort(key=rank)
+    best = social[0]
+    best["title_or_source_only"] = (not is_social_text(best["url"]) and
+                                    is_social_text(f"{best['title']} {best['source']}"))
+    return best
 
 
 # ---------- Stage 3: blockchain anchor -------------------------------------
@@ -159,13 +319,34 @@ def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def anchor_on_sepolia(payload: dict[str, Any]) -> dict[str, Any]:
-    rpc = os.environ["SEPOLIA_RPC_URL"]
-    pk = os.environ["SEPOLIA_PRIVATE_KEY"]
-    w3 = Web3(Web3.HTTPProvider(rpc))
-    if not w3.is_connected():
-        raise RuntimeError("Sepolia RPC unreachable")
+def _connect_web3() -> Web3:
+    """Connect to Sepolia. Try user's RPC, then public fallbacks."""
+    rpcs = [os.environ["SEPOLIA_RPC_URL"]] + [
+        "https://ethereum-sepolia-rpc.publicnode.com",
+        "https://rpc.sepolia.org",
+        "https://1rpc.io/sepolia",
+    ]
+    last_err = None
+    for rpc in rpcs:
+        try:
+            w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 15}))
+            if w3.is_connected():
+                # Sanity: get a real block number.
+                bn = w3.eth.block_number
+                if bn > 0:
+                    return w3
+        except Exception as e:
+            last_err = e
+            continue
+    raise RuntimeError(
+        f"Sepolia RPC unreachable. Tried: {rpcs}. Last error: {last_err}. "
+        f"Check SEPOLIA_RPC_URL in .env — your Alchemy key may be invalid."
+    )
 
+
+def anchor_on_sepolia(payload: dict[str, Any]) -> dict[str, Any]:
+    w3 = _connect_web3()
+    pk = os.environ["SEPOLIA_PRIVATE_KEY"]
     acct = Account.from_key(pk)
     payload_bytes = json.dumps(payload, sort_keys=True).encode()
     payload_hex = "0x" + payload_bytes.hex()
@@ -197,8 +378,14 @@ def anchor_on_sepolia(payload: dict[str, Any]) -> dict[str, Any]:
 
 def run(image_arg: str | None) -> dict[str, Any]:
     load_dotenv()
-    if not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
-        sys.exit("Missing GOOGLE_APPLICATION_CREDENTIALS. Copy .env.example to .env and fill in.")
+    has_image_search = (
+        os.environ.get("SERPAPI_KEY")
+        or os.environ.get("GOOGLE_VISION_API_KEY")
+        or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    )
+    if not has_image_search:
+        sys.exit("Missing reverse-image search key. Set SERPAPI_KEY (recommended, no card) "
+                 "or GOOGLE_VISION_API_KEY / GOOGLE_APPLICATION_CREDENTIALS in .env")
     if not os.environ.get("SEPOLIA_RPC_URL") or not os.environ.get("SEPOLIA_PRIVATE_KEY"):
         sys.exit("Missing SEPOLIA_RPC_URL or SEPOLIA_PRIVATE_KEY in .env")
 
@@ -221,7 +408,8 @@ def run(image_arg: str | None) -> dict[str, Any]:
           f"512-d embedding hashed to {emb_hash[:12]}... ({time.time()-t0:.1f}s)")
 
     # --- Stage 2 ---------------------------------------------------------
-    print("\n[2/4] Running Google Cloud Vision WEB_DETECTION...")
+    provider = "SerpAPI (Google Lens)" if os.environ.get("SERPAPI_KEY") else "Google Cloud Vision WEB_DETECTION"
+    print(f"\n[2/4] Running reverse-image search via {provider}...")
     t0 = time.time()
     web = vision_web_detection(img_path)
     print(f"    Got {len(web['pages_with_matching_images'])} pages, "
