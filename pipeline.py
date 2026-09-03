@@ -58,8 +58,8 @@ def _silence_stdout():
 # ---------- Defaults --------------------------------------------------------
 
 DEFAULT_IMAGE_URL = (
-    "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8c/"
-    "Cristiano_Ronaldo_2018.jpg/500px-Cristiano_Ronaldo_2018.jpg"
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/6/61/"
+    "Cristiano_Ronaldo%2C_2010.jpg/500px-Cristiano_Ronaldo%2C_2010.jpg"
 )
 SEPOLIA_CHAIN_ID = 11155111
 ETHERSCAN_BASE = "https://sepolia.etherscan.io/tx/"
